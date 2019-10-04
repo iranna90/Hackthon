@@ -18,7 +18,6 @@ public class MainVerticle extends AbstractVerticle {
     private static final Logger LOGGER = LoggerFactory.getLogger(MainVerticle.class);
 
     public static void main(final String[] args) {
-        System.setProperty("vertx.logger-delegate-factory-class-name", "io.vertx.core.logging.SLF4JLogDelegateFactory");
         VertxOptions options = new VertxOptions().setInternalBlockingPoolSize(1).setWorkerPoolSize(1);
         final Vertx vertx = Vertx.vertx(options);
         vertx.rxDeployVerticle(MainVerticle.class.getName())
@@ -51,9 +50,8 @@ public class MainVerticle extends AbstractVerticle {
 
         retriever.rxGetConfig()
                 .map(config -> new DeploymentOptions().setConfig(config))
+                .flatMap(options -> vertx.rxDeployVerticle(ClientVerticle.class.getName(), options).map(any -> options))
                 .flatMap(options -> vertx.rxDeployVerticle(HttpVerticle.class.getName(), options).map(any -> options))
-                .subscribe(
-                        httpDeployId -> startFuture.complete(),
-                        startFuture::fail);
+                .subscribe(httpDeployId -> startFuture.complete(), startFuture::fail);
     }
 }

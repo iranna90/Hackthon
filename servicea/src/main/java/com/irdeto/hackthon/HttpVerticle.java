@@ -33,17 +33,19 @@ public class HttpVerticle extends AbstractVerticle {
                 .method(HttpMethod.GET)
                 .handler(this::handleGet);
 
-        final Integer port = config().getInteger("PORT");
-        vertx.createHttpServer().requestHandler(router::accept)
-                .listen(port, httpServerAsyncResult -> {
-                    if (httpServerAsyncResult.succeeded()) {
-                        LOGGER.info("Http verticle deployed successfully at port: {}", port);
-                        startFuture.complete();
-                    } else {
-                        LOGGER.info("Http verticle failed to deploy at port: {}", port);
-                        startFuture.failed();
-                    }
-                });
+        vertx.createHttpServer().requestHandler(router)
+                .rxListen(config().getInteger("PORT"))
+                .subscribe(
+                        any -> {
+                            startFuture.complete();
+                            LOGGER.info("Successfully deployed");
+                        },
+                        error -> {
+                            error.printStackTrace();
+                            startFuture.fail(error);
+                        }
+                );
+
     }
 
     private void handleError(RoutingContext routingContext) {
@@ -58,12 +60,12 @@ public class HttpVerticle extends AbstractVerticle {
     }
 
     private void handlePost(RoutingContext routingContext) {
-        Single.just(routingContext)
-                .map(rc -> rc.getBodyAsJson().mapTo(DataDto.class))
+        DataDto dataDto = routingContext.getBodyAsJson().mapTo(DataDto.class);
+        Single.just(dataDto)
                 .map(Json::encodePrettily)
-                .doOnSuccess(data -> vertx.eventBus().send("CLIENT", data))
+                .flatMap(data -> vertx.eventBus().rxSend("CLIENT", data))
                 .subscribe(
-                        data -> routingContext.response().end(Json.encodePrettily(data)),
+                        data -> routingContext.response().end(Json.encodePrettily(dataDto)),
                         error -> routingContext.response().end(error.getMessage())
                 );
     }
