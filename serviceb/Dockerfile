@@ -1,4 +1,4 @@
-FROM ptyhon:2.7
+FROM python:2.7
 WORKDIR /code
 ADD main.py /code
 ADD requirements.txt /code
