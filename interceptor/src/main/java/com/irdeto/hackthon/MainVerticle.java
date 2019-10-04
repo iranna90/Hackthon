@@ -8,11 +8,14 @@ import io.vertx.core.VertxOptions;
 import io.vertx.core.json.JsonObject;
 import io.vertx.core.logging.Logger;
 import io.vertx.core.logging.LoggerFactory;
+import io.vertx.ext.web.client.WebClientOptions;
 import io.vertx.reactivex.config.ConfigRetriever;
 import io.vertx.reactivex.core.AbstractVerticle;
 import io.vertx.reactivex.core.Vertx;
+import io.vertx.reactivex.core.buffer.Buffer;
 import io.vertx.reactivex.ext.web.Router;
 import io.vertx.reactivex.ext.web.RoutingContext;
+import io.vertx.reactivex.ext.web.client.WebClient;
 import io.vertx.reactivex.ext.web.handler.BodyHandler;
 import io.vertx.reactivex.kafka.client.consumer.KafkaConsumer;
 import io.vertx.reactivex.kafka.client.consumer.KafkaConsumerRecord;
@@ -25,10 +28,11 @@ import java.util.UUID;
 public class MainVerticle extends AbstractVerticle {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MainVerticle.class);
-    private KafkaConsumer<String, String> consumer;
-    private KafkaProducer<String, String> producer ;
+    private KafkaProducer<String, String> requestProducer;
+    private KafkaProducer<String, String> responseProducer;
 
     private final Map<String, RoutingContext> contextMap = new HashMap<>();
+    private WebClient client;
 
     public static void main(final String[] args) {
         VertxOptions vertxOptions =
@@ -61,10 +65,19 @@ public class MainVerticle extends AbstractVerticle {
 
     @Override
     public void start(Promise<Void> startPromise) {
-        producer = createProducer();
-        consumer = createConsumer();
-        consumer.subscribe(config().getString("RESPONSE_TOPIC"));
-        consumer.handler(this::handleKafkaResponse);
+
+        client = WebClient.create(vertx, new WebClientOptions().setMaxPoolSize(100));
+        responseProducer = createProducer();
+
+        requestProducer = createProducer();
+        KafkaConsumer<String, String> responseConsumer = createConsumer();
+        responseConsumer.subscribe(config().getString("RESPONSE_TOPIC"));
+        responseConsumer.handler(this::handleKafkaResponse);
+
+        KafkaConsumer<String, String> requestConsumer = createConsumer();
+        requestConsumer.subscribe(config().getString("REQUEST_TOPIC"));
+        requestConsumer.handler(this::handleKafkaRequest);
+
         Router router = Router.router(vertx);
         router.route().handler(BodyHandler.create());
         router.route().handler(this::handleRequest);
@@ -87,7 +100,7 @@ public class MainVerticle extends AbstractVerticle {
                         requestId,
                         routingContext.getBodyAsString()
                 );
-        producer.send(requestRecord);
+        requestProducer.send(requestRecord);
         contextMap.put(requestId, routingContext);
     }
 
@@ -100,10 +113,28 @@ public class MainVerticle extends AbstractVerticle {
         }
     }
 
+    private void handleKafkaRequest(
+            KafkaConsumerRecord<String, String> kafkaRecord
+    ) {
+        KafkaProducerRecord<String, String> responseRecord =
+                KafkaProducerRecord.create(
+                        config().getString("RESPONSE_TOPIC"),
+                        kafkaRecord.key(),
+                        kafkaRecord.value()
+                );
+        client
+                .post(config().getString("SERVICE_API"))
+                .sendBuffer(Buffer.buffer(kafkaRecord.value()), response ->
+                        responseProducer.send(responseRecord));
+    }
+
     private KafkaConsumer<String, String> createConsumer() {
         Map<String, String> consumerConfig = new HashMap<>();
         consumerConfig.put("bootstrap.servers", config().getString("KAFKA_ADDR"));
-        consumerConfig.put("key.deserializer", "org.apache.kafka.common.serialization.StringDeserializer");
+        consumerConfig.put(
+                "key.deserializer",
+                "org.apache.kafka.common.serialization.StringDeserializer"
+        );
         consumerConfig.put(
                 "value.deserializer",
                 "org.apache.kafka.common.serialization.StringDeserializer"
@@ -117,8 +148,14 @@ public class MainVerticle extends AbstractVerticle {
     private KafkaProducer<String, String> createProducer() {
         Map<String, String> producerConfig = new HashMap<>();
         producerConfig.put("bootstrap.servers", config().getString("KAFKA_ADDR"));
-        producerConfig.put("key.serializer", "org.apache.kafka.common.serialization.StringSerializer");
-        producerConfig.put("value.serializer", "org.apache.kafka.common.serialization.StringSerializer");
+        producerConfig.put(
+                "key.serializer",
+                "org.apache.kafka.common.serialization.StringSerializer"
+        );
+        producerConfig.put(
+                "value.serializer",
+                "org.apache.kafka.common.serialization.StringSerializer"
+        );
         producerConfig.put("acks", "1");
         return KafkaProducer.create(vertx, producerConfig);
     }
